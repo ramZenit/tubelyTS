@@ -1,14 +1,13 @@
 import { getBearerToken, validateJWT } from "../auth";
 import { BadRequestError, NotFoundError, UserForbiddenError } from "./errors";
 import { respondWithJSON } from "./json";
-import { getVideo, updateVideo } from "../db/videos";
+import { getVideo, updateVideo, type Video } from "../db/videos";
 import { randomBytes } from "crypto";
 import path from "path";
-import { uploadVideoToS3 } from "../s3";
+import { uploadVideoToS3, generatePresignedURL } from "../s3";
 
 import { type ApiConfig } from "../config";
-import { type BunRequest, type S3File } from "bun";
-import { fstat } from "fs";
+import { type BunRequest } from "bun";
 
 const MAX_UPLOAD_SIZE = 1 << 30; // 1 GB
 const ALLOWED_THUMBNAIL_TYPES = ["video/mp4"];
@@ -75,12 +74,13 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
       "video/mp4"
     );
 
-    const videoURL = `https://${cfg.s3Bucket}.s3.${cfg.s3Region}.amazonaws.com/${aspectRatio}/${processedFilepath}`;
+    //const videoURL = `https://${cfg.s3Bucket}.s3.${cfg.s3Region}.amazonaws.com/${aspectRatio}/${processedFilepath}`;
+    const videoURL = `${aspectRatio}/${processedFilepath}`;
     console.log("Uploaded video to S3:", videoURL);
     video.videoURL = videoURL;
     updateVideo(cfg.db, video);
 
-    return respondWithJSON(200, video);
+    return respondWithJSON(200, await dbVideoToSignedVideo(cfg, video));
   } finally {
     try {
       if (await Bun.file(tempFilepath).exists()) {
@@ -163,7 +163,6 @@ async function processVideoForFastStart(inputFilePath: string) {
     }
   );
 
-  const stdout = await new Response(result.stdout).text();
   const stderr = await new Response(result.stderr).text();
 
   const exitCode = await result.exited;
@@ -171,4 +170,14 @@ async function processVideoForFastStart(inputFilePath: string) {
     throw new Error(`ffprobe failed with exit code ${exitCode}: ${stderr}`);
   }
   return outputFilePath;
+}
+
+export async function dbVideoToSignedVideo(cfg: ApiConfig, video: Video) {
+  if (!video.videoURL) {
+    return video;
+  }
+  console.log("signing key:", video.videoURL);
+
+  video.videoURL = await generatePresignedURL(cfg, video.videoURL, 5 * 60);
+  return video;
 }

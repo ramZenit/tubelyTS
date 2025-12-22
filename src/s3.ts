@@ -10,3 +10,15 @@ export async function uploadVideoToS3(
   const videoFile = Bun.file(processesFilePath);
   await s3file.write(videoFile, { type: contentType });
 }
+
+export async function generatePresignedURL(
+  cfg: ApiConfig,
+  key: string,
+  expireTime: number
+) {
+  console.log("presign key:", key);
+  const url = cfg.s3Client.presign(key, {
+    expiresIn: expireTime,
+  });
+  return url;
+}
