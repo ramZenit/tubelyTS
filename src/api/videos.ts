@@ -69,13 +69,12 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
 
     await uploadVideoToS3(
       cfg,
-      `${aspectRatio}/${processedFilepath}`,
+      `${aspectRatio}/${tempFileName}`,
       processedFilepath,
       "video/mp4"
     );
 
-    //const videoURL = `https://${cfg.s3Bucket}.s3.${cfg.s3Region}.amazonaws.com/${aspectRatio}/${processedFilepath}`;
-    const videoURL = `${aspectRatio}/${processedFilepath}`;
+    const videoURL = `${aspectRatio}/${tempFileName}`;
     console.log("Uploaded video to S3:", videoURL);
     video.videoURL = videoURL;
     updateVideo(cfg.db, video);
@@ -85,11 +84,9 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
     try {
       if (await Bun.file(tempFilepath).exists()) {
         await Bun.file(tempFilepath).delete();
-        console.log("Deleted temp video file");
       }
       if (await Bun.file(processedFilepath).exists()) {
         await Bun.file(processedFilepath).delete();
-        console.log("Deleted processed video file");
       }
     } catch (err) {
       console.log("Failed to delete temp video file:", err);
@@ -176,7 +173,6 @@ export async function dbVideoToSignedVideo(cfg: ApiConfig, video: Video) {
   if (!video.videoURL) {
     return video;
   }
-  console.log("signing key:", video.videoURL);
 
   video.videoURL = await generatePresignedURL(cfg, video.videoURL, 5 * 60);
   return video;
