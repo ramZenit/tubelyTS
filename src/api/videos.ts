@@ -33,8 +33,6 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
     );
   }
 
-  console.log("uploading video", videoId, "by user", userID);
-
   const formData = await req.formData();
   const file = formData.get("video");
 
@@ -54,15 +52,30 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
   const buffer = Buffer.from(arrayBuffer);
 
   const randomString = randomBytes(32).toString("base64url");
-  const key = `${randomString}.${mediaType.split("/")[1]}`;
-  const tempFilepath = path.join(cfg.assetsRoot, key);
+  const tempFileName = `${randomString}.${mediaType.split("/")[1]}`;
+  const tempFilepath = path.join(cfg.assetsRoot, tempFileName);
 
+  let processedFilepath = "";
   try {
     await Bun.write(tempFilepath, buffer);
+    const aspectRatio = await getVideoAspectRatio(tempFilepath);
+    console.log(
+      "uploading video",
+      `${aspectRatio}/${tempFileName}`,
+      "by user",
+      userID
+    );
 
-    await uploadVideoToS3(cfg, key, tempFilepath, "video/mp4");
+    processedFilepath = await processVideoForFastStart(tempFilepath);
 
-    const videoURL = `https://${cfg.s3Bucket}.s3.${cfg.s3Region}.amazonaws.com/${key}`;
+    await uploadVideoToS3(
+      cfg,
+      `${aspectRatio}/${processedFilepath}`,
+      processedFilepath,
+      "video/mp4"
+    );
+
+    const videoURL = `https://${cfg.s3Bucket}.s3.${cfg.s3Region}.amazonaws.com/${aspectRatio}/${processedFilepath}`;
     console.log("Uploaded video to S3:", videoURL);
     video.videoURL = videoURL;
     updateVideo(cfg.db, video);
@@ -74,8 +87,88 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
         await Bun.file(tempFilepath).delete();
         console.log("Deleted temp video file");
       }
+      if (await Bun.file(processedFilepath).exists()) {
+        await Bun.file(processedFilepath).delete();
+        console.log("Deleted processed video file");
+      }
     } catch (err) {
       console.log("Failed to delete temp video file:", err);
     }
   }
+}
+
+async function getVideoAspectRatio(filepath: string) {
+  const result = Bun.spawn(
+    [
+      "ffprobe",
+      "-v",
+      "error",
+      "-select_streams",
+      "v:0",
+      "-show_entries",
+      "stream=width,height",
+      "-of",
+      "json",
+      "-show_streams",
+      filepath,
+    ],
+    {
+      stdout: "pipe",
+      stderr: "pipe",
+    }
+  );
+
+  const stdout = await new Response(result.stdout).text();
+  const stderr = await new Response(result.stderr).text();
+
+  const exitCode = await result.exited;
+  if (exitCode !== 0) {
+    throw new Error(`ffprobe failed with exit code ${exitCode}: ${stderr}`);
+  }
+
+  const data = JSON.parse(stdout);
+  const { width, height } = data.streams[0];
+
+  const ratio = width / height;
+  const aspectRatio =
+    Math.abs(ratio - 16 / 9) < 0.01
+      ? "landscape"
+      : Math.abs(ratio - 9 / 16) < 0.01
+      ? "portrait"
+      : "other";
+
+  return aspectRatio;
+}
+
+async function processVideoForFastStart(inputFilePath: string) {
+  let outputFilePath = inputFilePath + ".processed.mp4";
+  const result = Bun.spawn(
+    [
+      "ffmpeg",
+      "-i",
+      inputFilePath,
+      "-movflags",
+      "faststart",
+      "-map_metadata",
+      "0",
+      "-codec",
+      "copy",
+      "-f",
+      "mp4",
+      outputFilePath,
+    ],
+    {
+      stdout: "pipe",
+      stderr: "pipe",
+    }
+  );
+
+  const stdout = await new Response(result.stdout).text();
+  const stderr = await new Response(result.stderr).text();
+
+  const exitCode = await result.exited;
+  if (exitCode !== 0) {
+    throw new Error(`ffprobe failed with exit code ${exitCode}: ${stderr}`);
+  }
+  return outputFilePath;
 }
