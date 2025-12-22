@@ -4,7 +4,7 @@ import { respondWithJSON } from "./json";
 import { getVideo, updateVideo, type Video } from "../db/videos";
 import { randomBytes } from "crypto";
 import path from "path";
-import { uploadVideoToS3, generatePresignedURL } from "../s3";
+import { uploadVideoToS3 } from "../s3";
 
 import { type ApiConfig } from "../config";
 import { type BunRequest } from "bun";
@@ -74,12 +74,12 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
       "video/mp4"
     );
 
-    const videoURL = `${aspectRatio}/${tempFileName}`;
-    console.log("Uploaded video to S3:", videoURL);
+    const videoURL = `${cfg.s3CfDistribution}/${aspectRatio}/${tempFileName}`;
+    console.log("Uploaded completed:", videoURL);
     video.videoURL = videoURL;
     updateVideo(cfg.db, video);
 
-    return respondWithJSON(200, await dbVideoToSignedVideo(cfg, video));
+    return respondWithJSON(200, video);
   } finally {
     try {
       if (await Bun.file(tempFilepath).exists()) {
@@ -167,13 +167,4 @@ async function processVideoForFastStart(inputFilePath: string) {
     throw new Error(`ffprobe failed with exit code ${exitCode}: ${stderr}`);
   }
   return outputFilePath;
-}
-
-export async function dbVideoToSignedVideo(cfg: ApiConfig, video: Video) {
-  if (!video.videoURL) {
-    return video;
-  }
-
-  video.videoURL = await generatePresignedURL(cfg, video.videoURL, 5 * 60);
-  return video;
 }
